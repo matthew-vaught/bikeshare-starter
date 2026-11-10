@@ -4,7 +4,12 @@ import pytest
 from sklearn.metrics import r2_score
 
 from src.config import FORBIDDEN, LAG_WARMUP, TARGET
-from src.features import build_features, feature_columns, reindex_to_calendar
+from src.features import (
+    build_features,
+    encode_weather,
+    feature_columns,
+    reindex_to_calendar,
+)
 from src.ingest import load_raw
 from src.train import MODELS, temporal_split
 
@@ -99,3 +104,10 @@ def test_unclassified_check_can_fail(raw):
 
 def test_permitted_and_forbidden_do_not_overlap():
     assert not (PERMITTED_RAW & FORBIDDEN), PERMITTED_RAW & FORBIDDEN
+
+
+def test_encode_weather_rejects_unknown_label():
+    """An unseen weather label must raise, not become a NaN that dropna()
+    silently deletes. Uses an in-memory Series; the raw CSV is not involved."""
+    with pytest.raises(ValueError):
+        encode_weather(pd.Series(["GOOD", "MISTY", "BAD", "FOGGY"]))
