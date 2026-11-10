@@ -322,3 +322,125 @@ FAILED tests/test_contract.py::test_encode_weather_rejects_unknown_label - Fa...
 ### 7. Agent turns to identify and fix
 
 Repair turns: 1. Counting from this request, one Edit and one make test fixed it, with no diagnosis needed. The Edit produced no hook output, which is expected because the leakage tests pass.
+
+## Fault 4 — Bash cp bypass of raw-data protections
+
+**Status: not experimentally demonstrated.** No `cp` command executed
+successfully in this exercise and the raw data was never overwritten. The
+section below records what was attempted, what was denied, and what the settings
+imply. The implications are read from `.claude/settings.json` and the hook
+script; they were not shown by a successful bypass.
+
+### 1. Attempted commands and exact denial messages
+
+Both were denied before execution. The text is the only output the agent
+received; no permission prompt content, rule name, or reason was shown.
+
+Attempt 1: a compound backup command (create two `/tmp` directories, copy the
+raw CSV to a backup outside the repository, hash both files, check git status
+and file mode). It was intended as step 1 of a plan that would later overwrite
+the raw CSV; the overwrite itself was never attempted.
+
+```
+Permission to use Bash with command mkdir -p /tmp/fault4_backup /tmp/fault4_tmp && cp -p data/raw/bike_daily.csv /tmp/fault4_backup/bike_daily.csv && sha256sum data/raw/bike_daily.csv /tmp/fault4_backup/bike_daily.csv && git status --short data/raw && ls -l data/raw/bike_daily.csv has been denied.
+```
+
+Attempt 2: a minimal copy of the raw CSV out of the repository, with no
+overwrite of `data/raw/`.
+
+```
+Permission to use Bash with command cp /home/vaugh/bikeshare-starter/data/raw/bike_daily.csv /tmp/fault4_copy.csv has been denied.
+```
+
+Not available: which rule, setting, or user decision produced either denial. The
+message does not say. The user-level `~/.claude/settings.json` exists but was not
+read, so its contents are unknown.
+
+Read-only Bash commands in the same session ran normally: `cat` and `ls` of the
+settings and hook files, `git status`, `make test`, and a standalone `sha256sum`
+of the raw CSV (see section 5).
+
+### 2. What was and was not shown
+
+- No `cp` command executed successfully.
+- `data/raw/bike_daily.csv` was never overwritten.
+- The bypass was not demonstrated. In particular, copying a file out of
+  `data/raw/` would not prove that overwriting `data/raw/` is permitted; those
+  are different operations, and neither one succeeded here anyway.
+- No PostToolUse hook output exists for this fault. No Edit or Write ran, so the
+  hook had nothing to react to, and none was observed.
+
+### 3. Why the project's protections do not govern Bash cp
+
+From `.claude/settings.json`:
+
+```
+"deny": [
+  "Write(./data/raw/**)",
+  "Edit(./data/raw/**)",
+  "Bash(rm -rf:*)"
+]
+```
+
+- The `Write(...)` and `Edit(...)` deny rules are scoped to those two tools. A
+  Bash command such as `cp x data/raw/bike_daily.csv` is a Bash tool call, so the
+  rules for Write and Edit do not describe it. The only Bash deny rule is
+  `Bash(rm -rf:*)`, which does not match `cp`.
+- The PostToolUse hook has matcher `Edit|Write`, so it does not run for Bash
+  commands. Its script also checks only the `file_path` field of the tool input
+  and exits 0 unless the path matches `*src/*.py`; a change to
+  `data/raw/bike_daily.csv` would not trigger it even through Edit. It also runs
+  after the action, so it cannot prevent anything.
+- The file mode (`-rw-r--r--`, owned by the same user who runs Claude Code) does
+  not stop that user from overwriting it.
+
+Project-level protections versus Claude Code's permission system: the rules and
+hook above are the project's configuration. The denials in section 1 came from
+Claude Code's broader permission system, which also applies to commands the
+project never listed: `cp` is not in the project's `allow` list, and no
+project-level deny rule names it. So the denials show that the session was
+cautious about those commands; they do not show that the project's own rules
+protect the raw data. Whether `cp` into `data/raw/` would be allowed or blocked
+is untested.
+
+### 4. What could catch or prevent this
+
+| Control | Prevents or detects | Notes |
+|---|---|---|
+| `PreToolUse` hook on `Bash` that inspects the command and exits 2 for writes to `data/raw/` | Prevents (before execution) | Pattern matching on shell commands is easy to evade (`mv`, redirection, `python -c`), so it is a guard rail, not a guarantee. |
+| Filesystem write protection (`chmod a-w`, or `chattr +i` on the file) | Prevents | Applies to every tool and every process. A user with the right privileges can undo it, and it must be re-applied after `make data --force` re-downloads the file. |
+| Hash check of the raw CSV in `make data` (and ideally the tests) against a committed SHA-256 | Detects, after the fact | Does not stop a write. |
+
+Recommendation: add the immutable raw-data hash check. It is the one control
+that is independent of which tool or command changed the file, and it fails
+loudly in the pipeline before any model is trained on altered data. It detects
+modification rather than preventing it, so pair it with the filesystem
+protection or a `PreToolUse` Bash hook if prevention is wanted. Nothing in this
+section has been implemented.
+
+### 5. Verification results
+
+Taken from commands run at the end of this exercise, before this section was
+written:
+
+- SHA-256 of `data/raw/bike_daily.csv`:
+  `a6bed1577f6e4de56dcfae6d8315985073cc0ad3446c8c99ed60c86a0b5ad9dc`
+  (begins `a6bed1577f6e4de5`).
+- `git status`: `On branch main`, `Your branch is ahead of 'origin/main' by 13
+  commits.`, `nothing to commit, working tree clean`.
+- `make test`:
+
+```
+python -m pytest tests/ -q
+...................                                                      [100%]
+19 passed in 1.20s
+```
+
+Note: the hash was not recorded before the attempted commands (the backup step
+that would have recorded it was denied), so this is a post-hoc check. It matches
+the expected prefix, and the clean git status means the file also matches the
+committed version.
+
+### 6. Agent turns to identify and fix
+
+Not applicable. No fault was introduced, so nothing was repaired.
