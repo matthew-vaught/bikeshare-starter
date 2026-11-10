@@ -321,4 +321,4 @@ FAILED tests/test_contract.py::test_encode_weather_rejects_unknown_label - Fa...
 
 ### 7. Agent turns to identify and fix
 
-PENDING. The fault has not been fixed yet.
+Repair turns: 1. Counting from this request, one Edit and one make test fixed it, with no diagnosis needed. The Edit produced no hook output, which is expected because the leakage tests pass.
