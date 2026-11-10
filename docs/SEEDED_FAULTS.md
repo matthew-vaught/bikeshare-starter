@@ -107,4 +107,4 @@ Unavailable output:
 
 ### 5. Agent turns to identify and fix
 
-PENDING. The fault has not been fixed yet.
+1 agent repair turn. Claude restored .shift(1) in src/features.py, and make test passed with 18 tests.
