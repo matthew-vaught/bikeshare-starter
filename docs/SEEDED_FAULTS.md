@@ -204,3 +204,121 @@ Unavailable output:
 ### 5. Agent turns to identify and fix
 
 1 agent repair turn. Claude restored .shift(1) in src/features.py, and make test passed with 18 tests.
+
+## Fault 3 — Unknown weather labels silently accepted
+
+### 1. The change
+
+One line in `src/features.py`, made with the Edit tool (the smallest change
+that removes the guard). The `raise` in `encode_weather()` was replaced with
+`pass`, so an unmapped weather label no longer raises.
+
+```diff
+     if unknown:
+-        raise ValueError(f"unmapped weather labels: {sorted(unknown)}")
++        pass
+     return series.map(WEATHER_ORDER).astype(float)
+```
+
+The faulty function was committed as `f47f72c`.
+
+### 2. The existing test suite did not catch it
+
+Command: `python -m pytest tests/` (run after the edit, before any new test).
+
+```
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.7.0
+rootdir: /home/vaugh/bikeshare-starter
+plugins: anyio-4.16.0
+collected 18 items
+
+tests/test_contract.py .......                                           [ 38%]
+tests/test_leakage.py ........                                           [ 83%]
+tests/test_split.py ...                                                  [100%]
+
+============================== 18 passed in 1.32s ==============================
+```
+
+All 18 tests passed. No test gave `encode_weather()` an unknown label, and the
+real CSV only contains `GOOD`, `MISTY` and `BAD`, so the guard was never
+exercised. `test_every_raw_column_is_classified` checks column names, not values.
+
+### 3. PostToolUse hook
+
+No automatic hook failure was observed, and no hook stderr is available. The
+Edit result said only "The file ... has been updated successfully". This is
+consistent with how the hook is written: `check_leakage.sh` runs only
+`tests/test_leakage.py` and is silent (exit 0) when those tests pass, and none
+of them exercises `encode_weather()` with an unknown label. Whether the hook ran
+and passed silently or did not run was not directly observable.
+
+### 4. In-memory demonstration (raw CSV not modified)
+
+The real data was loaded, one row's `weather` was set to `FOGGY` in memory, and
+the features were built. Output as captured:
+
+```
+[0.0, 1.0, 2.0, nan]
+raw rows 728 -> feature rows 713 | FOGGY row survived: False
+BAD days in features: 20
+```
+
+- Line 1 is `encode_weather(pd.Series(["GOOD","MISTY","BAD","FOGGY"]))`: `FOGGY`
+  becomes NaN instead of raising `ValueError`.
+- Lines 2 and 3 are `build_features()` on the real data with row 300 set to
+  `FOGGY`. That day vanished with no error or warning, giving 713 feature rows.
+  The unmodified data gives 714 feature rows (e.g. `[714 rows x 29 columns]` in
+  the Fault 1 and Fault 2 pytest output above), so the single `FOGGY` row was
+  silently dropped: 714 to 713. The demo script itself printed only the 713; the
+  714 comes from the unmodified builds in this session.
+
+### 5. Regression test
+
+Added to `tests/test_contract.py` (in-memory Series, raw CSV not involved):
+
+```python
+def test_encode_weather_rejects_unknown_label():
+    """An unseen weather label must raise, not become a NaN that dropna()
+    silently deletes. Uses an in-memory Series; the raw CSV is not involved."""
+    with pytest.raises(ValueError):
+        encode_weather(pd.Series(["GOOD", "MISTY", "BAD", "FOGGY"]))
+```
+
+Failing output against the seeded fault
+(`python -m pytest tests/test_contract.py -k encode_weather`):
+
+```
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.7.0
+rootdir: /home/vaugh/bikeshare-starter
+plugins: anyio-4.16.0
+collected 8 items / 7 deselected / 1 selected
+
+tests/test_contract.py F                                                 [100%]
+
+=================================== FAILURES ===================================
+__________________ test_encode_weather_rejects_unknown_label ___________________
+
+    def test_encode_weather_rejects_unknown_label():
+        """An unseen weather label must raise, not become a NaN that dropna()
+        silently deletes. Uses an in-memory Series; the raw CSV is not involved."""
+>       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_contract.py:112: Failed
+=========================== short test summary info ============================
+FAILED tests/test_contract.py::test_encode_weather_rejects_unknown_label - Fa...
+======================= 1 failed, 7 deselected in 1.98s ========================
+```
+
+### 6. Detection
+
+- **Did the original suite catch it?** No. All 18 tests passed.
+- **Did the hook detect it?** No hook failure was observed (see section 3).
+- **Does the new test catch it?** Yes. `test_encode_weather_rejects_unknown_label`
+  fails with `DID NOT RAISE ValueError`.
+
+### 7. Agent turns to identify and fix
+
+PENDING. The fault has not been fixed yet.
