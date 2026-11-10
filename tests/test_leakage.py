@@ -57,6 +57,18 @@ def test_rolling_mean_excludes_today(feats):
         assert feats.set_index("dteday").cnt_roll_7[date] == pytest.approx(expected)
 
 
+def test_roll_3_is_mean_of_three_prior_days(feats):
+    """cnt_roll_3 on 2012-03-15 is the mean of Mar 12-14, excluding Mar 15.
+
+    Expected value is hand-computed from data/raw/bike_daily.csv, not from the
+    pipeline: cnt on 03-12/13/14 = 5298/5847/6312 -> 17457 / 3 = 5819.0.
+    Today's count (6192) is deliberately different, so including it would fail.
+    """
+    assert "cnt_roll_3" in feats.columns, "cnt_roll_3 has not been implemented"
+    row = feats.set_index("dteday").loc[pd.Timestamp("2012-03-15")]
+    assert row.cnt_roll_3 == pytest.approx((5298 + 5847 + 6312) / 3)
+
+
 def test_no_missing_values(feats):
     assert feats[feature_columns(feats)].isna().sum().sum() == 0
 
