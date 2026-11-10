@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from sklearn.metrics import r2_score
 
-from src.config import LAG_WARMUP, TARGET
+from src.config import FORBIDDEN, LAG_WARMUP, TARGET
 from src.features import build_features, feature_columns, reindex_to_calendar
 from src.ingest import load_raw
 from src.train import MODELS, temporal_split
@@ -56,3 +56,46 @@ def test_persistence_baseline_is_reported():
     """The baseline that matters for a lag-driven model is 'yesterday again'.
     It must be in the comparison, whatever its score."""
     assert "baseline_persistence" in MODELS
+
+
+# --- Every raw column must be classified ---------------------------------
+# A column that is neither forbidden, permitted, nor the date was never
+# reviewed for leakage. Adding one to the CSV must force a decision here.
+DATE_COL = "dteday"
+
+# Permitted raw columns, spelled out on purpose (not derived from
+# feature_columns(), which only sees engineered numeric columns).
+PERMITTED_RAW = {
+    # used directly as model features
+    "temp", "atemp", "hum", "windspeed",
+    # encoded into is_holiday / is_workday / weather_severity
+    "holiday", "workday", "weather",
+    # calendar duplicates of dteday; not model inputs (dayofweek and the
+    # month encodings are rebuilt from dteday), but reviewed and harmless
+    "season", "mnth", "weekday",
+}
+
+
+def unclassified_columns(columns) -> set[str]:
+    """Columns that are not FORBIDDEN, not permitted, and not the date."""
+    return set(columns) - FORBIDDEN - PERMITTED_RAW - {DATE_COL}
+
+
+def test_every_raw_column_is_classified(raw):
+    extra = unclassified_columns(raw.columns)
+    assert not extra, (
+        f"unclassified raw columns {sorted(extra)}: add each to FORBIDDEN in "
+        "src/config.py or to PERMITTED_RAW here, after checking it for leakage"
+    )
+
+
+def test_unclassified_check_can_fail(raw):
+    """Proves the check bites, using a synthetic column; the CSV is untouched."""
+    assert unclassified_columns(raw.columns) == set()
+    assert unclassified_columns([*raw.columns, "surprise_col"]) == {"surprise_col"}
+    # and a renamed leak is not waved through just because casual is forbidden
+    assert unclassified_columns([*raw.columns, "casual_2"]) == {"casual_2"}
+
+
+def test_permitted_and_forbidden_do_not_overlap():
+    assert not (PERMITTED_RAW & FORBIDDEN), PERMITTED_RAW & FORBIDDEN
